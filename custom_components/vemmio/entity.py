@@ -1,0 +1,128 @@
+"""Base entity for Vemmio."""
+
+from collections.abc import Callable
+
+from vemmio import Capability, DeviceModel
+
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import DOMAIN, LOGGER
+from .coordinator import VemmioDataUpdateCoordinator
+
+
+@callback
+def async_setup_attribute_entities_switches(
+    hass: HomeAssistant,
+    async_add_entities: AddEntitiesCallback,
+    coordinator: VemmioDataUpdateCoordinator,
+    entity_class: Callable,
+) -> None:
+    """Set up Vemmio switch entities based on device capabilities."""
+    entities = []
+
+    device_capabilities = coordinator.data.get_capabilities("switch")
+
+    LOGGER.debug(
+        "[async_setup_attribute_entities_switches] Device capabilities: %s",
+        str(device_capabilities),
+    )
+
+    for capability in device_capabilities:
+        LOGGER.debug(
+            "[async_setup_attribute_entities_switches] Adding entity for capability: %s",
+            str(capability),
+        )
+        entities.append(entity_class(coordinator, capability))
+
+    async_add_entities(entities, True)
+
+
+@callback
+def async_setup_attribute_entities_binary_sensors(
+    hass: HomeAssistant,
+    async_add_entities: AddEntitiesCallback,
+    coordinator: VemmioDataUpdateCoordinator,
+    entity_class: Callable,
+) -> None:
+    """Set up Vemmio binary sensor entities based on device capabilities."""
+    entities = []
+
+    device_capabilities = coordinator.data.get_capabilities("openClose")
+
+    LOGGER.debug(
+        "[async_setup_attribute_entities_binary_sensors] Device capabilities: %s",
+        str(device_capabilities),
+    )
+
+    for capability in device_capabilities:
+        LOGGER.debug(
+            "[async_setup_attribute_entities_binary_sensors] Adding entity for capability: %s",
+            str(capability),
+        )
+        entities.append(entity_class(coordinator, capability))
+
+    async_add_entities(entities, True)
+
+
+class VemmioEntity(CoordinatorEntity[VemmioDataUpdateCoordinator]):
+    """Defines a base Vemmio entity."""
+
+    _capability: Capability
+    _coordinator: VemmioDataUpdateCoordinator
+
+    def __init__(
+        self, coordinator: VemmioDataUpdateCoordinator, capability: Capability
+    ) -> None:
+        """Initialize."""
+        super().__init__(coordinator)
+        self._capability = capability
+        self._coordinator = coordinator
+        coordinator.device.register_status_update_callback(
+            self._capability.get_uuid_with_id(), self._handle_status_update
+        )
+        coordinator.device.enable_websocket()
+
+    @property
+    def should_poll(self) -> bool:
+        """No polling needed for a Vemmio entity."""
+        return False
+
+    @property
+    def device_info(self):
+        """Return device information about this entity."""
+
+        # Last 3 bytes of mac address
+
+        LOGGER.debug("[VemmioEntity] Getting device info")
+        LOGGER.debug(str(self.coordinator))
+        LOGGER.debug(str(self.coordinator.data))
+
+        deviceModel: DeviceModel = self.coordinator.data.model
+
+        macId = deviceModel.info.mac.replace(":", "")[-6:]
+        device_name = f"VEMMIO-{deviceModel.info.type}-{macId}".upper()
+
+        LOGGER.debug("Device name: %s", device_name)
+
+        return DeviceInfo(
+            connections={(CONNECTION_NETWORK_MAC, deviceModel.info.mac)},
+            identifiers={(DOMAIN, deviceModel.info.mac)},
+            name=device_name,
+            manufacturer="Vemmio",
+            model=deviceModel.info.type,
+            sw_version=deviceModel.info.fw,
+            hw_version=deviceModel.info.revision,
+            configuration_url=f"http://{self.coordinator.vemmio.host}",
+        )
+
+    @callback
+    def _handle_status_update(self) -> None:
+        """Handle a status update from the websocket."""
+        LOGGER.debug(
+            f"[VemmioEntity] {self._capability.get_uuid_with_id()}:  Handling status update."
+        )
+
+        self.async_write_ha_state()
